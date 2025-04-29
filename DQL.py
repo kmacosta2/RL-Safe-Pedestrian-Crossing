@@ -14,12 +14,13 @@ class DQN(nn.Module):
 
         # Define network layers
         self.fc1 = nn.Linear(in_states, h1_nodes)   # first fully connected layer
-        self.out = nn.Linear(h1_nodes, out_actions) # ouptut layer w
+        self.fc2 = nn.Linear(h1_nodes, h1_nodes)
+        self.out = nn.Linear(h1_nodes, out_actions) # output layer w
 
     def forward(self, x):
         x = F.relu(self.fc1(x)) # Apply rectified linear unit (ReLU) activation
-        x = self.out(x)         # Calculate output
-        return x
+        x = F.relu(self.fc2(x))
+        return self.out(x)         # Calculate output
 
 # Define memory for Experience Replay
 class ReplayMemory():
@@ -35,237 +36,137 @@ class ReplayMemory():
     def __len__(self):
         return len(self.memory)
 
-# FrozeLake Deep Q-Learning
-#class FrozenLakeDQL():
+# trainer
 class SafePedestrianDQL():
-    # Hyperparameters (adjustable)
+    # Hyperparameters
     learning_rate_a = 0.001         # learning rate (alpha)
     discount_factor_g = 0.9         # discount rate (gamma)    
     network_sync_rate = 10          # number of steps the agent takes before syncing the policy and target network
     replay_memory_size = 1000       # size of replay memory
-    mini_batch_size = 32            # size of the training data set sampled from the replay memory
+    mini_batch_size = 64  #  32     # size of the training data set sampled from the replay memory
 
     # Neural Network
     loss_fn = nn.MSELoss()          # NN Loss function. MSE=Mean Squared Error can be swapped to something else.
     optimizer = None                # NN Optimizer. Initialize later.
 
-    #ACTIONS = ['L','D','R','U']     # for printing 0,1,2,3 => L(eft),D(own),R(ight),U(p)
-
-    # Train the FrozeLake environment
     def train(self, episodes): #, render=False, is_slippery=False):
-        # Create FrozenLake instance
-        #env = gym.make('FrozenLake-v1', map_name="4x4", is_slippery=is_slippery, render_mode='human' if render else None)
-        env = PedestrianCrossingEnv()
-        num_states = env.observation_space.n
-        num_actions = env.action_space.n
+        # create instance
+        env = gym.make('PedestrianCrossing-v0')
+        num_states = env.observation_space.shape[0] # should be 6
+        num_actions = env.action_space.n #should be 3
         
-        epsilon = 1 # 1 = 100% random actions
+        epsilon = 1.0 # 1 = 100% random actions
         memory = ReplayMemory(self.replay_memory_size)
 
-        # Create policy and target network. Number of nodes in the hidden layer can be adjusted.
+        # create policy & target network.
         policy_dqn = DQN(in_states=num_states, h1_nodes=num_states, out_actions=num_actions)
         target_dqn = DQN(in_states=num_states, h1_nodes=num_states, out_actions=num_actions)
+        target_dqn.load_state_dict(policy_dqn.state_dict())# make the target & policy networks the same
 
-        # Make the target and policy networks the same (copy weights/biases from one network to the other)
-        target_dqn.load_state_dict(policy_dqn.state_dict())
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        policy_dqn = policy_dqn.to(device)
+        target_dqn = target_dqn.to(device)
 
-        print('Policy (random, before training):')
-        self.print_dqn(policy_dqn)
-
-        # Policy network optimizer. "Adam" optimizer can be swapped to something else. 
         self.optimizer = torch.optim.Adam(policy_dqn.parameters(), lr=self.learning_rate_a)
 
-        # List to keep track of rewards collected per episode. Initialize list to 0's.
-        rewards_per_episode = np.zeros(episodes)
-
-        # List to keep track of epsilon decay
-        epsilon_history = []
-
-        # Track number of steps taken. Used for syncing policy => target network.
-        step_count=0
-            
+        rewards_per_episode = np.zeros(episodes)# list to keep track of rewards collected per episode. Init list to 0's.
+        epsilon_history = []        #list to keep track of epsilon decay
+        step_count=0 # track number of steps taken. Used for syncing policy => target network.
+        
         for i in range(episodes):
-            state = env.reset()[0]  # Initialize to state 0
-            #terminated = False      # True when agent falls in hole or reached goal
-            #truncated = False       # True when agent takes more than 200 actions    
-            
-            done = False # <- new flag for when any terminating condition is met for pedestrian.
+            state, _ = env.reset() # Init to state 0
+            state = self.state_to_tensor(state, device)
+            terminated = False # <- new flag for when any terminating condition is met for pedestrian.
 
-            # Agent navigates map until it falls into hole/reaches goal (terminated), or has taken 200 actions (truncated).
-            while(not terminated and not truncated):
+            total_reward = 0
 
-                # Select action based on epsilon-greedy
+            while not terminated:
+                # select action based on epsilon-greedy
                 if random.random() < epsilon:
                     # select random action
                     action = env.action_space.sample() # actions: 0=left,1=down,2=right,3=up
-                else:
-                    # select best action            
+                else: # select best action
                     with torch.no_grad():
-                        action = policy_dqn(self.state_to_dqn_input(state, num_states)).argmax().item()
+                        action = policy_dqn(state).argmax().item()
 
-                # Execute action
-                new_state,reward,terminated,truncated,_ = env.step(action)
+                # execute action
+                new_state, reward, terminated, truncated, _ = env.step(action)
+                next_state = self.state_to_tensor(next_state, device) if not terminated else None
 
-                # Save experience into memory
+                # save experience into memory
                 memory.append((state, action, new_state, reward, terminated)) 
+                
+                state = new_state # move to the next state
+                total_reward+= reward
 
-                # Move to the next state
-                state = new_state
-
-                # Increment step counter
-                step_count+=1
-
-            # Keep track of the rewards collected per episode.
-            if reward == 1:
-                rewards_per_episode[i] = 1
-
-            # Check if enough experience has been collected and if at least 1 reward has been collected
-            if len(memory)>self.mini_batch_size and np.sum(rewards_per_episode)>0:
+            # check if enough experience has been collected and if at least 1 reward has been collected
+            if len(memory)>self.mini_batch_size:
                 mini_batch = memory.sample(self.mini_batch_size)
-                self.optimize(mini_batch, policy_dqn, target_dqn)
+                self.optimize(mini_batch, policy_dqn, target_dqn, device)
 
-                # Decay epsilon
-                epsilon = max(epsilon - 1/episodes, 0)
-                epsilon_history.append(epsilon)
-
-                # Copy policy network to target network after a certain number of steps
+                # copy policy network to target network after a certain number of steps
                 if step_count > self.network_sync_rate:
                     target_dqn.load_state_dict(policy_dqn.state_dict())
                     step_count=0
 
-        # Close environment
+            rewards_per_episode[i] = total_reward
+            # decay epsilon
+            epsilon = max(epsilon - 1/episodes, 0.05)
+            epsilon_history.append(epsilon)
+            print(f"Episode{i+1}/{episodes} finished with reward {total_reward}")
         env.close()
 
-        # Save policy
-        torch.save(policy_dqn.state_dict(), "frozen_lake_dql.pt")
-
-        # Create new graph 
-        plt.figure(1)
-
-        # Plot average rewards (Y-axis) vs episodes (X-axis)
-        sum_rewards = np.zeros(episodes)
-        for x in range(episodes):
-            sum_rewards[x] = np.sum(rewards_per_episode[max(0, x-100):(x+1)])
-        plt.subplot(121) # plot on a 1 row x 2 col grid, at cell 1
-        plt.plot(sum_rewards)
+        torch.save(policy_dqn.state_dict(), "pedestrian_crossing_dql.pt") # save policy
         
-        # Plot epsilon decay (Y-axis) vs episodes (X-axis)
-        plt.subplot(122) # plot on a 1 row x 2 col grid, at cell 2
+        plt.figure(figsize=(12,5))
+        plt.subplot(121)
+        plt.plot(rewards_per_episode)
+        plt.title("Total Reward per Episode")
+        plt.xlabel("Episode")
+        plt.ylabel("Reward")
+
+        plt.subplot(122)
         plt.plot(epsilon_history)
-        
-        # Save plots
-        plt.savefig('frozen_lake_dql.png')
+        plt.title("Epsilon Decay")
+        plt.xlabel("Episode")
+        plt.ylabel("Epsilon")
+            
+        plt.tight_layout()
+        plt.savefig('pedestrian_crossing_dql_training.png')
+        plt.show()
 
     # Optimize policy network
-    def optimize(self, mini_batch, policy_dqn, target_dqn):
+    def optimize(self, mini_batch, policy_dqn, target_dqn, device):
+        states, actions, next_states, rewards, terminateds = zip(*mini_batch)
 
-        # Get number of input nodes
-        num_states = policy_dqn.fc1.in_features
+        states = torch.cat(states).to(device)
+        actions = torch.tensor(actions, device=device).unsqueeze(1)
+        rewards = torch.tensor(rewards, dtype=torch.float32, device=device).unsqueeze(1)
+        
+        non_final_mask = torch.tensor([s is not None for s in next_states], device = device, dtype = torch.bool)
+        non_final_next_states = torch.cat([s for s in next_states if s is not None]).to(device)
 
-        current_q_list = []
-        target_q_list = []
+        current_q_values = policy_dqn(states).gather(1, actions)
 
-        for state, action, new_state, reward, terminated in mini_batch:
-
-            if terminated: 
-                # Agent either reached goal (reward=1) or fell into hole (reward=0)
-                # When in a terminated state, target q value should be set to the reward.
-                target = torch.FloatTensor([reward])
-            else:
-                # Calculate target q value 
-                with torch.no_grad():
-                    target = torch.FloatTensor(
-                        reward + self.discount_factor_g * target_dqn(self.state_to_dqn_input(new_state, num_states)).max()
-                    )
-
-            # Get the current set of Q values
-            current_q = policy_dqn(self.state_to_dqn_input(state, num_states))
-            current_q_list.append(current_q)
-
-            # Get the target set of Q values
-            target_q = target_dqn(self.state_to_dqn_input(state, num_states)) 
-            # Adjust the specific action to the target that was just calculated
-            target_q[action] = target
-            target_q_list.append(target_q)
-                
-        # Compute loss for the whole minibatch
-        loss = self.loss_fn(torch.stack(current_q_list), torch.stack(target_q_list))
+        next_q_values = torch.zeros(self.mini_batch_size, device=device) # target values
+        next_q_values[non_final_mask] = target_dqn(non_final_next_states).max(1)[0].detach()
+        
+        expected_q_values = (next_q_values.unsqueeze(1)*self.discount_factor_g) + rewards
+        #       compute the loss
+        loss = self.loss_fn(current_q_values, expected_q_values)
 
         # Optimize the model
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
 
-    '''
-    Converts an state (int) to a tensor representation.
-    For example, the FrozenLake 4x4 map has 4x4=16 states numbered from 0 to 15. 
+    def state_to_tensor(self, state:int, device):
+        # convert numpy array state to torch tensor
+        return torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
 
-    Parameters: state=1, num_states=16
-    Return: tensor([0., 1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.])
-    '''
- #   def state_to_dqn_input(self, state:int, num_states:int)->torch.Tensor:
- #       input_tensor = torch.zeros(num_states)
- #       input_tensor[state] = 1
- #       return input_tensor
-
-  #  # Run the FrozeLake environment with the learned policy
-  #  def test(self, episodes, is_slippery=False):
-  #      # Create FrozenLake instance
-  #      env = gym.make('FrozenLake-v1', map_name="4x4", is_slippery=is_slippery, render_mode='human')
-  #      num_states = env.observation_space.n
-  #      num_actions = env.action_space.n
-
-  #      # Load learned policy
-  #      policy_dqn = DQN(in_states=num_states, h1_nodes=num_states, out_actions=num_actions) 
-  #      policy_dqn.load_state_dict(torch.load("frozen_lake_dql.pt"))
-  #      policy_dqn.eval()    # switch model to evaluation mode
-
-  #      print('Policy (trained):')
-  #      self.print_dqn(policy_dqn)
-
-    #        for i in range(episodes):
-    #        state = env.reset()[0]  # Initialize to state 0
-    #        terminated = False      # True when agent falls in hole or reached goal
-    #        truncated = False       # True when agent takes more than 200 actions            
-
-    #        # Agent navigates map until it falls into a hole (terminated), reaches goal (terminated), or has taken 200 actions (truncated).
-    #        while(not terminated and not truncated):  
-    #            # Select best action   
-    #            with torch.no_grad():
-    #                action = policy_dqn(self.state_to_dqn_input(state, num_states)).argmax().item()
-
-    #            # Execute action
-    #            state,reward,terminated,truncated,_ = env.step(action)
-
-    #    env.close()
-
-    # Print DQN: state, best action, q values
-    def print_dqn(self, dqn):
-        # Get number of input nodes
-        num_states = dqn.fc1.in_features
-
-        # Loop each state and print policy to console
-        for s in range(num_states):
-            #  Format q values for printing
-            q_values = ''
-            for q in dqn(self.state_to_dqn_input(s, num_states)).tolist():
-                q_values += "{:+.2f}".format(q)+' '  # Concatenate q values, format to 2 decimals
-            q_values=q_values.rstrip()              # Remove space at the end
-
-            # Map the best action to L D R U
-            best_action = self.ACTIONS[dqn(self.state_to_dqn_input(s, num_states)).argmax()]
-
-            # Print policy in the format of: state, action, q values
-            # The printed layout matches the FrozenLake map.
-            print(f'{s:02},{best_action},[{q_values}]', end=' ')         
-            if (s+1)%4==0:
-                print() # Print a newline every 4 states
 
 if __name__ == '__main__':
 
-    #frozen_lake = FrozenLakeDQL()
-    #is_slippery = False
-    #frozen_lake.train(1000, is_slippery=is_slippery)
-    safe_pedestrian.train(1000)
-    #frozen_lake.test(10, is_slippery=is_slippery)
-    safe_pedestrian.evaluate() # <- this will include things like: safety rate, average wait time, etc.
+    pedestrian_crossing = SafePedestrianDQL()
+    pedestrian_crossing.train(episodes=1000)
+    #safe_pedestrian.evaluate() # <- this will include things like: safety rate, average wait time, etc.

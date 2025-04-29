@@ -9,7 +9,6 @@ class PedestrianCrossingEnv(gym.Env):
     The pedestrian must cross four lanes of traffic while avoiding getting hit by vehicles.
     The goal is to reach the other sidewalk safely (and efficiently).
     """
-
     def __init__(self):
         super(PedestrianCrossingEnv, self).__init__()
 
@@ -24,10 +23,8 @@ class PedestrianCrossingEnv(gym.Env):
             high=np.array([self.num_positions - 1] + [1]*self.num_lanes + [50]),
             dtype=np.float32
         )
-
         # defining the action space (0: wait, 1: move forward one lane, 2: move backward one lane)
         self.action_space = spaces.Discrete(3)
-
         self.reset()
 
     def reset(self, seed=None, options=None):
@@ -48,7 +45,6 @@ class PedestrianCrossingEnv(gym.Env):
         """
         self.time_elapsed += 1
         self.traffic_lanes = self._generate_traffic()
-
         # perform action: forward moves the pedestrian one lane, backward moves one lane back
         if action == 1:  # move forward (one lane)
             self.pedestrian_position = min(self.pedestrian_position + 1, self.num_positions - 1)
@@ -102,24 +98,24 @@ class PedestrianCrossingEnv(gym.Env):
         print("="*44)
 
 # Register environment to Gymnasium
-#gym.register(
-#    id="PedestrianCrossing-v0",
-#    entry_point=PedestrianCrossingEnv,
-#)
+gym.register(
+    id="PedestrianCrossing-v0",
+    entry_point=PedestrianCrossingEnv,
+)
 
-if __name__ == "__main__":
-    env = PedestrianCrossingEnv() # testing the environment with a random agent
-    obs, _ = env.reset()
+#if __name__ == "__main__":
+#    env = PedestrianCrossingEnv() # testing the environment with a random agent
+#    obs, _ = env.reset()
+#
+#    done = False
+#    total_reward = 0
+#    print("\nAction space (0: wait, 1: move forward, 2: move backward)\n")
+#    while not done:
+#        action = env.action_space.sample()
+#        obs, reward, done, _, _ = env.step(action)
+#        total_reward += reward
+#        print(f"Action: {action}")
+#        env.render()
+#        print(f'\t\t\tCurrent Reward: {reward}')
 
-    done = False
-    total_reward = 0
-    print("\nAction space (0: wait, 1: move forward, 2: move backward)\n")
-    while not done:
-        action = env.action_space.sample()
-        obs, reward, done, _, _ = env.step(action)
-        total_reward += reward
-        print(f"Action: {action}")
-        env.render()
-        print(f'\t\t\tCurrent Reward: {reward}')
-
-    print("Episode finished. Total Reward:", total_reward)
+#    print("Episode finished. Total Reward:", total_reward)
