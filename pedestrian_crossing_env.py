@@ -56,17 +56,18 @@ class PedestrianCrossingEnv(gym.Env):
 
         # collision detection: pedestrian is hit if in a lane with a vehicle
         if current_lane >= 0 and self.traffic_lanes[current_lane] == 1:
-            reward = -50
+            reward = -20 #-30 #-40 #-50
             self.done = True
         elif self.pedestrian_position == self.num_positions - 1:
-            # successfully crossed the road!!
-            reward = 10
+            reward = 10             # successfully crossed the road
             self.done = True
+            
+        #elif action == 1: # <-- added to encourage survival
+        #    reward = 1
         else:
             reward = -1  # providing a time penalty to encourage faster crossing
 
-        # check if time limit reached
-        if self.time_elapsed >= 50:
+        if self.time_elapsed >= 50:        # check if time limit reached
             self.done = True
 
         return self._get_state(), reward, self.done, False, {}
@@ -75,7 +76,9 @@ class PedestrianCrossingEnv(gym.Env):
         """
         generates traffic states for each lane with a 50% chance of a vehicle .
         """
-        return [np.random.binomial(n=1, p=0.1) for _ in range(self.num_lanes)] # [random.choice([0, 1]) for _ in range(self.num_lanes)] # reduce to 0.2-0.4  random.binomial()
+        # [random.choice([0, 1]) for _ in range(self.num_lanes)] # reduce to 0.2-0.4  random.binomial()
+        #[np.random.binomial(n=1, p=0.1) for _ in range(self.num_lanes)]
+        return [np.random.binomial(n=1, p=0.025) for _ in range(self.num_lanes)]
 
     def _get_state(self):
         """
@@ -98,10 +101,10 @@ class PedestrianCrossingEnv(gym.Env):
         print("="*44)
 
 # Register environment to Gymnasium
-gym.register(
-    id="PedestrianCrossing-v0",
-    entry_point=PedestrianCrossingEnv,
-)
+#gym.register(
+#    id="PedestrianCrossing-v0",
+#    entry_point=PedestrianCrossingEnv,
+#)
 
 #if __name__ == "__main__":
 #    env = PedestrianCrossingEnv() # testing the environment with a random agent
